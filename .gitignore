@@ -1,0 +1,5 @@
+data/dataset.csv
+models/
+.venv/
+__pycache__/
+*.pyc
