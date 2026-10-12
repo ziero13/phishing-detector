@@ -87,23 +87,59 @@ if bundle is None:
 
 meta = bundle["meta"]
 
+def explain_url(url: str, lex: dict, pred: int) -> list:
+    """Explication simple en francais des signaux observes dans l'URL.
+    pred = categorie predite (0 legitime, 1 phishing), pour le message de repli."""
+    raisons = []
+    if lex["has_ip"] == 1:
+        raisons.append("l'adresse est une adresse IP au lieu d'un nom de domaine (souvent suspect)")
+    if lex["has_https"] == 0:
+        raisons.append("l'URL n'utilise pas HTTPS")
+    if lex["nb_special"] >= 1:
+        raisons.append(f"elle contient {int(lex['nb_special'])} caractere(s) speciaux (@ ? = % & _ ~)")
+    if lex["url_length"] > 50:
+        raisons.append(f"elle est plutot longue ({int(lex['url_length'])} caracteres)")
+    if lex["nb_hyphens"] >= 1:
+        raisons.append(f"elle contient {int(lex['nb_hyphens'])} tiret(s) (technique d'imitation courante)")
+    if lex["nb_dots"] >= 3:
+        raisons.append(f"elle contient {int(lex['nb_dots'])} points (sous-domaines multiples possibles)")
+    if lex["nb_digits"] >= 4:
+        raisons.append(f"elle contient {int(lex['nb_digits'])} chiffres")
+    if not raisons:
+        if pred == 1:
+            raisons.append("aucun indice isole evident, mais la combinaison de ses caracteristiques "
+                           "ressemble aux URL de phishing vues a l'entrainement (decision par les voisins)")
+        else:
+            raisons.append("aucun signal suspect : URL courte, HTTPS, sans caracteres speciaux ni tirets")
+    return raisons
+
+
 url = st.text_input("URL a analyser", placeholder="ex. https://example.com/login")
 if st.button("Analyser"):
     if not url.strip():
         st.warning("Veuillez saisir une URL.")
     else:
+        lex = extract_lexical_features(url)
         X = build_vector(url, meta)
         Xs = bundle["scaler"].transform(X)
         pred_knn = int(bundle["knn"].predict(Xs)[0])
+        score_knn = float(bundle["knn"].predict_proba(Xs)[0][1])
         d = bundle["kmeans"].transform(Xs)
         import numpy as np
         pred_h = int(bundle["hybrid"].predict(np.hstack([Xs, d]))[0])
+        score_h = float(bundle["hybrid"].predict_proba(np.hstack([Xs, d]))[0][1])
         cluster = int(bundle["kmeans"].predict(Xs)[0])
         label = lambda p: "Suspecte (phishing probable)" if p == 1 else "Legitime probable"
         st.subheader("Resultat")
-        st.write(f"K-NN seul : **{label(pred_knn)}**")
-        st.write(f"Hybride (K-Means + K-NN) : **{label(pred_h)}**")
+        st.write(f"K-NN seul : **{label(pred_knn)}** — score : **{score_knn:.0%}**")
+        st.write(f"Hybride (K-Means + K-NN) : **{label(pred_h)}** — score : **{score_h:.0%}**")
+        st.progress(score_h, text=f"Score de phishing (hybride) : {score_h:.0%}")
+        st.caption("Score indicatif (vote des 5 voisins, pas une probabilite calibree) ; "
+                   "seuil de decision : 50 %.")
         st.caption(f"URL rattachee au cluster K-Means n°{cluster} (regroupement non supervise).")
+        st.subheader("Pourquoi ce resultat ?")
+        for r in explain_url(url, lex, pred_h):
+            st.write(f"- {r}.")
         if meta["numeric_cols"]:
             st.caption("Note : le dataset contient des colonnes non derivables d'une URL seule "
                        "(mises a 0 pour la prediction). La prediction sur URL libre est donc "
